@@ -20,6 +20,8 @@ One major challenge was cleaning and preprocessing Moodle data, as these dataset
 
 We're proud to have identified key indicators that influence academic performance, particularly the link between assignment types and grades. Despite limited data, our adjustments to the model revealed insights that could be further developed. Additionally, our ability to adapt our approach mid-project, incorporating additional variables to increase model reliability, demonstrated our flexibility and commitment to finding the best solution. 
 
+![WhatsApp Image 2024-10-27 at 10 31 42](https://github.com/user-attachments/assets/f0169066-89d9-48b4-ba55-8172cc8cd481)
+
 ## What we learned
 
 This project taught us the importance of an interative approach to data analysis. We learned that predictive modelling in education requires more than just grades and assignments, it benefits greatly from a holistic view of a student's context. Furthermore, the need for extensive metadata in academic predictions became evident, reinforcing the value of data diversity in AI models. 
@@ -27,3 +29,5 @@ This project taught us the importance of an interative approach to data analysis
 ## What's next for  Algorithm-Based Academic Optimization.
 
 Our next steps include to integrate more complex metadata, such as socioeconomic background, personal challenges, and lifestyle habits, to enhance model accuracy. We also plan to collaborate with educational institutions to obtain more diverse datasets and refine our algorithms. Ultimately, we aim to develop a comprehensive tool that can support students by predicting academic outcomes more accurately and suggesting actionable steps for improvement. 
+
+
