@@ -1,0 +1,218 @@
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.decomposition import TruncatedSVD
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Load data from CSV files
+trameses = pd.read_csv('trameses.csv', delimiter=',')
+activitats = pd.read_csv('activitats.csv', delimiter=';')
+notes = pd.read_csv('notes.csv', delimiter=';')
+
+# Clean and preprocess trameses DataFrame
+trameses = trameses.drop(columns=['grader', 'id', 'dategraded'])
+trameses = trameses.loc[trameses.groupby(['userid', 'activitat_id'])['nevaluations'].idxmax()]
+
+# Clean and preprocess notes DataFrame
+notes = notes.drop(columns=['P_Grade_Date', 'F_Grade_Date', 'R_Grade_Date'])
+
+def max_mean_comparison(df, col1, col2, col3):
+    """
+    Calculate the maximum of the mean of col2 and col3 for each row in the DataFrame.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame.
+        col1 (str): Column name for the first value.
+        col2 (str): Column name for the second value.
+        col3 (str): Column name for the third value.
+
+    Returns:
+        pd.Series: A Series containing the maximum of the mean of col2 and col3 for each row.
+    """
+    def calculate_max(row):
+        # Convert values to float, handling any non-numeric strings
+        try:
+            val1 = float(row[col1])
+        except ValueError:
+            val1 = np.nan
+
+        try:
+            val2 = float(row[col2])
+        except ValueError:
+            val2 = np.nan
+
+        try:
+            val3 = float(row[col3])
+        except ValueError:
+            val3 = np.nan
+
+        # Calculate the mean of col2, ignoring NaNs
+        mean_value = np.nanmean([val2])
+        # Return the maximum of mean_value and col3, ignoring NaNs
+        return np.nanmax([mean_value, val3])
+
+    # Apply the function row by row
+    return df.apply(calculate_max, axis=1)
+
+# Apply max_mean_comparison function to notes DataFrame
+notes['F'] = max_mean_comparison(notes, 'P_Grade', 'F_Grade', 'R_Grade')
+
+# Drop rows where final grades (F) are NaN
+notes = notes[~notes['F'].isnull()]
+notes = notes.drop(columns=['F_Grade', 'R_Grade'])
+
+# Clean and preprocess activitats DataFrame
+activitats = activitats.drop(columns=['startdate'])
+activitats['duedate'] = activitats['duedate'].replace(0, np.nan)
+
+# Merge trameses with activitats DataFrame
+activities_assignments = pd.merge(trameses, activitats, on='activitat_id', how='left')
+
+# Calculate time differences between due date and submitted date
+activities_assignments['t'] = activities_assignments['duedate'] - activities_assignments['datesubmitted']
+activities_assignments = activities_assignments.drop(columns=['duedate', 'datesubmitted'])
+
+# Calculate relative grade
+activities_assignments['rel_grade'] = activities_assignments['grade'] / activities_assignments['max_grade']
+
+# Clean the activitat column from encoding issues
+activities_assignments['activitat'] = activities_assignments['activitat'].apply(
+    lambda x: x.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
+)
+
+# Update the activitat column to retain only the first word
+for i in range(len(activities_assignments)):
+    activities_assignments.at[i, 'activitat'] = activities_assignments['activitat'][i].split()[0]
+
+# Initialize columns for counts
+activities_assignments['grade_nan_count'] = activities_assignments['rel_grade']
+activities_assignments['total_counts'] = activities_assignments['rel_grade']
+
+# Create a cross-tabulation of activity counts
+activity_counts = pd.crosstab(
+    index=[activities_assignments['userid'], activities_assignments['aula_id']], 
+    columns=activities_assignments['activitat']
+).reset_index()
+
+# Aggregate grouped data with specified functions
+agg_dict = {
+    'rel_grade': lambda x: np.nanmean(x),
+    'nevaluations': lambda x: x.notna().sum(),
+    't': lambda x: np.nanmean(x),
+    'grade_nan_count': lambda x: x.isna().sum(),     # Count NaNs in the grade column
+    'total_counts': lambda x: x.count()               # Count non-NaNs in the grade column
+}
+
+grouped_df = activities_assignments.groupby(['userid', 'aula_id']).agg(agg_dict).reset_index()
+grouped_df = pd.merge(grouped_df, activity_counts, on=['userid', 'aula_id'], how='left')
+
+# Clip the time values to a reasonable range
+grouped_df['t'] = grouped_df['t'].clip(lower=0.0, upper=2.0 * 30 * 24 * 3600)
+t_hat = np.mean(grouped_df['t'])
+grouped_df['t'] = grouped_df['t'].replace(np.nan, t_hat)
+
+# Plot the distribution of total counts by Aula ID using a violin plot
+plt.figure(figsize=(8, 6))
+sns.violinplot(y='t', data=grouped_df)
+
+# Customize the plot
+plt.title('Violin Plot of Total Counts by Aula ID')
+plt.xlabel('Aula ID')
+plt.ylabel('Total Count')
+plt.show()
+
+# Calculate the percentage of non-NaN grades
+grouped_df['perc'] = (grouped_df['total_counts'] - grouped_df['grade_nan_count']) / grouped_df['total_counts']
+grouped_df = grouped_df[~(grouped_df['perc'] < 0)]
+
+# Show a summary of the grouped DataFrame
+grouped_df.describe()
+
+# Merge notes with grouped_df to create total_df
+total_df = pd.merge(notes, grouped_df, on=['userid', 'aula_id'], how='left')
+total_df = total_df.drop(columns=['P_Grade'])
+
+# Remove rows with NaN percentages
+total_df = total_df[~(total_df['perc'].isnull())]
+
+# Fix potential encoding issues in columns
+total_df['Practica'] = total_df['Pr�ctica']
+total_df['Recu'] = total_df['RECUPERACIO'] + total_df['RECUPERACI�'] + total_df['RECUPERACI�:'] + total_df['Recuperaci�']
+total_df = total_df.drop(columns=['Pr�ctica', 'RECUPERACIO', 'RECUPERACI�', 'RECUPERACI�:', 'Recuperaci�'])
+
+# Melt the total_df DataFrame for easier plotting
+df_melted = total_df.melt(id_vars=['userid', 'F'], 
+                           value_vars=['Problema', '(OPCIONAL)', 'Entrega', 'Recu', 'Lliurament'], 
+                           var_name='Activity_Type', 
+                           value_name='Submission_Count')
+
+# Create a scatter plot to show the relationship between submission counts and final grades
+plt.figure(figsize=(12, 8))
+sns.scatterplot(data=df_melted, x='Submission_Count', y='F', hue='Activity_Type', alpha=0.7)
+plt.title('Relationship between Submission Counts and Final Grades')
+plt.xlabel('Number of Submissions')
+plt.ylabel('Final Grade (F)')
+plt.legend(title='Activity Type')
+plt.grid(True)
+plt.show()
+
+# Prepare data for regression analysis
+x_total = total_df[['(OPCIONAL)', 'total_counts']].values
+y_total = total_df['F'].values
+
+# Fit a linear regression model
+lr = LinearRegression()
+lr.fit(x_total, y_total)
+
+# Scale the features
+scaler = StandardScaler()
+X_scaled_total = scaler.fit_transform(x_total.astype(np.float64))
+
+# Split the data into training and testing sets
+x_train, x_test, y_train, y_test = train_test_split(X_scaled_total, y_total, test_size=0.2)
+
+# Handle potential NaN values in the training set
+print(np.argwhere(np.isnan(x_train)))
+x_train[np.argwhere(np.isnan(x_train))]
+
+# Create a pipeline with TruncatedSVD and RandomForestRegressor
+svd = TruncatedSVD(n_components=2)  # Adjust the number of components as needed
+rf_regressor = RandomForestRegressor(n_estimators=100, random_state=42)
+
+# Combine SVD and RandomForest in a pipeline
+pipeline = make_pipeline(svd, rf_regressor)
+
+# Fit the pipeline on the training data
+pipeline.fit(x_train, y_train)
+
+# Make predictions on the test data
+y_pred = pipeline.predict(x_test)
+
+# Evaluate the model's performance
+mse_svd = mean_squared_error(y_test, y_pred)
+r2_svd = r2_score(y_test, y_pred)
+
+print(f"SVD + RandomForest Mean Squared Error (MSE): {mse_svd:.2f}")
+print(f"SVD + RandomForest R-squared (R2) Score: {r2_svd:.2f}")
+
+# Fit a separate RandomForest model for comparison
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+
+# Fit the model to the training data
+rf_model.fit(x_train, y_train)
+
+# Make predictions on the test set
+y_pred_rf = rf_model.predict(x_test)
+
+# Evaluate the RandomForest model's performance
+mse_rf = mean_squared_error(y_test, y_pred_rf)
+r2_rf = r2_score(y_test, y_pred_rf)
+
+print(f"RandomForest Mean Squared Error (MSE): {mse_rf:.2f}")
+print(f"RandomForest R-squared (R2) Score: {r2_rf:.2f}")
